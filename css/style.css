@@ -1,0 +1,147 @@
+/* Existing styles you posted */
+body {
+    font-family: Arial, sans-serif;
+    background: #eef;
+    padding: 0;
+    margin: 0;
+}
+header, nav {
+    padding: 10px;
+    background: #004080;
+    color: #fff;
+}
+h1, h2, h3 {
+    margin: 10px 0;
+}
+.stats {
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+}
+.stats div {
+    background: #fff;
+    padding: 20px;
+    border-radius: 5px;
+    text-align: center;
+    flex: 1;
+}
+/* Updated navigation styles */
+nav {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+/* Nav links styles */
+nav a {
+    color: #fff;
+    text-decoration: none;
+    font-weight: bold;
+    padding: 6px 14px;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+    margin-right: 0; /* reset to let flex gap work */
+}
+nav a:hover {
+    background-color: #003060;
+    color: #fff;
+}
+
+/* Push logout button to the far right */
+nav a.logout-button {
+    margin-left: auto;
+    background-color: #fff;
+    color: #004080;
+    border: 2px solid #004080;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    padding: 6px 14px;
+    border-radius: 4px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* Logout hover style */
+nav a.logout-button:hover {
+    background-color: #004080;
+    color: #fff;
+}
+
+/* Other original styles */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+}
+th, td {
+    border: 1px solid #ccc;
+    padding: 8px;
+}
+form {
+    background: #fff;
+    padding: 20px;
+    margin: 20px;
+    max-width: 400px;
+}
+input, select, button {
+    width: 100%;
+    padding: 8px;
+    margin: 5px 0;
+}
+button {
+    background: #004080;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+}
+.scanners {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    padding: 20px;
+}
+.scanner {
+    background: #fff;
+    padding: 20px;
+    border-radius: 5px;
+}
+#display {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    background: #fff;
+    padding: 20px;
+    border: 1px solid #004080;
+    border-radius: 5px;
+}
+.card img {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+}
+.error {
+    color: red;
+}
+
+/* Dashboard header keep flex with spacing */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/*Add student style */
+a.button {
+    padding: 6px 14px;
+    background-color: #004080;
+    color: #fff;
+    text-decoration: none;
+    font-weight: bold;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+
+a.button:hover {
+    background-color: #003060;
+}
+
