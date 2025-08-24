@@ -2,246 +2,375 @@
 session_start();
 if (!isset($_SESSION['user_id'])) {
     header('Location: ../users/login.php');
-    exit;
+    exit();
 }
 
 require '../config/db.php';
 
-// Fetch all students for the student filter dropdown
-$students = $pdo->query("SELECT id, first_name, last_name, grade_level, section FROM students ORDER BY last_name, first_name")->fetchAll();
+// Fetch all students
+$students = $pdo
+    ->query(
+        'SELECT id, first_name, last_name FROM students ORDER BY last_name, first_name'
+    )
+    ->fetchAll();
 
-// Process filters from GET
+// Fetch distinct sections
+$sections = $pdo
+    ->query(
+        'SELECT DISTINCT section FROM students WHERE section IS NOT NULL AND section <> "" ORDER BY section'
+    )
+    ->fetchAll(PDO::FETCH_COLUMN);
+
+// Process filters
 $student_id = $_GET['student_id'] ?? '';
-$section = trim($_GET['section'] ?? '');
-$grade_level = $_GET['grade_level'] ?? '';
-$date_filter = $_GET['date_filter'] ?? 'daily';
-$date_value = $_GET['date_value'] ?? date('Y-m-d');
+$section = $_GET['section'] ?? '';
+$date_from = $_GET['date_from'] ?? '';
+$date_to = $_GET['date_to'] ?? '';
 
-try {
-    $date = new DateTime($date_value);
-} catch (Exception $e) {
-    $date = new DateTime();
-    $date_value = $date->format('Y-m-d');
+$whereClauses = [];
+$params = [];
+
+// Date range filter
+if ($date_from !== '' && $date_to !== '') {
+    $whereClauses[] = 'a.time BETWEEN ? AND ?';
+    $params[] = $date_from . ' 00:00:00';
+    $params[] = $date_to . ' 23:59:59';
 }
 
-switch ($date_filter) {
-    case 'weekly':
-        $weekStart = clone $date;
-        $weekStart->modify('monday this week');
-        $weekEnd = clone $weekStart;
-        $weekEnd->modify('sunday this week 23:59:59');
-        $dateStart = $weekStart->format('Y-m-d 00:00:00');
-        $dateEnd = $weekEnd->format('Y-m-d 23:59:59');
-        break;
-    case 'monthly':
-        $dateStart = $date->format('Y-m-01 00:00:00');
-        $dateEnd = $date->format('Y-m-t 23:59:59');
-        break;
-    case 'daily':
-    default:
-        $dateStart = $date->format('Y-m-d 00:00:00');
-        $dateEnd = $date->format('Y-m-d 23:59:59');
-        break;
-}
-
-$whereClauses = ["a.time BETWEEN ? AND ?"];
-$params = [$dateStart, $dateEnd];
-
+// Student filter
 if ($student_id !== '' && is_numeric($student_id)) {
-    $whereClauses[] = "a.student_id = ?";
+    $whereClauses[] = 'a.student_id = ?';
     $params[] = $student_id;
 }
 
+// Section filter
 if ($section !== '') {
-    $whereClauses[] = "s.section LIKE ?";
-    $params[] = "%$section%";
+    $whereClauses[] = 's.section = ?';
+    $params[] = $section;
 }
 
-if ($grade_level !== '') {
-    $whereClauses[] = "s.grade_level = ?";
-    $params[] = $grade_level;
-}
+$whereSQL = $whereClauses ? 'WHERE ' . implode(' AND ', $whereClauses) : '';
 
-$whereSQL = 'WHERE ' . implode(' AND ', $whereClauses);
-
+// Fetch attendance records
 $sql = "
-SELECT 
-    s.id AS student_id,
+SELECT
+    s.id           AS student_id,
     s.first_name,
     s.last_name,
     s.grade_level,
     s.section,
-    DATE(a.time) AS attendance_date,
-    MIN(CASE WHEN a.type = 'IN' THEN a.time ELSE NULL END) AS time_in,
-    MAX(CASE WHEN a.type = 'OUT' THEN a.time ELSE NULL END) AS time_out
+    a.time,
+    a.type
 FROM attendance a
 JOIN students s ON a.student_id = s.id
 {$whereSQL}
-GROUP BY s.id, attendance_date
-ORDER BY attendance_date DESC, s.last_name, s.first_name
-LIMIT 100
+ORDER BY s.last_name, s.first_name, a.time ASC
 ";
-
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
-$records = $stmt->fetchAll();
+$attendanceRecords = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Pair IN and OUT
+$pairedRecords = [];
+$currentStudent = null;
+$pendingInRecord = null;
+
+function formatDate($dt)
+{
+    return date('M d, Y', strtotime($dt));
+}
+function formatTime($dt)
+{
+    return date('h:i A', strtotime($dt));
+}
+
+foreach ($attendanceRecords as $rec) {
+    if ($currentStudent !== $rec['student_id']) {
+        $currentStudent = $rec['student_id'];
+        $pendingInRecord = null;
+    }
+    if ($rec['type'] === 'IN') {
+        if ($pendingInRecord) {
+            $pairedRecords[] = [
+                'info' => $pendingInRecord,
+                'time_out' => null,
+            ];
+        }
+        $pendingInRecord = $rec;
+    } else {
+        if ($pendingInRecord) {
+            $pairedRecords[] = [
+                'info' => $pendingInRecord,
+                'time_out' => $rec['time'],
+            ];
+            $pendingInRecord = null;
+        } else {
+            $pairedRecords[] = [
+                'info' => $rec,
+                'time_in' => null,
+                'time_out' => $rec['time'],
+            ];
+        }
+    }
+}
+if ($pendingInRecord) {
+    $pairedRecords[] = [
+        'info' => $pendingInRecord,
+        'time_out' => null,
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
     <title>Attendance Records</title>
-    <link rel="stylesheet" href="../css/style.css" />
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0/dist/css/select2.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="/attendance-sim/css/style.css?v=<?= time() ?>" />
     <style>
+        /* Container: filter section + export buttons aligned */
+        .filter-export-container {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        /* Filters container */
         form.filters {
-            margin-bottom: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 16px;
+            align-items: flex-end;
+            max-width: calc(100% - 310px); /* leave space for export buttons */
+            min-width: 250px;
         }
+
         form.filters label {
-            margin-right: 10px;
             font-weight: bold;
+            margin-bottom: 4px;
+            display: block;
+            font-size: 14px;
         }
-        form.filters input, form.filters select {
-            margin-right: 20px;
-            padding: 4px 8px;
+
+        form.filters select,
+        form.filters input[type="date"] {
+            height: 30px;
+            font-size: 14px;
+            padding: 2px 6px;
+            min-width: 150px;
+            max-width: 180px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
         }
+
+        form.filters button.search-btn {
+            background-color: #004080;
+            color: white;
+            font-weight: bold;
+            padding: 6px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            height: 34px;
+            white-space: nowrap;
+            transition: background-color 0.3s ease;
+            min-width: 80px;
+        }
+
+        form.filters button.search-btn:hover {
+            background-color: #003060;
+        }
+
+        /* Export buttons container aligned vertically with filters */
+        .export-buttons {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-shrink: 0;
+            width: 300px;
+        }
+
+        .export-buttons form {
+            margin: 0;
+        }
+
+        .export-buttons button.button {
+            width: 100%;
+            height: 34px;
+            font-size: 14px;
+            font-weight: bold;
+            background-color: #007b00;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 0.3s ease;
+        }
+
+        .export-buttons button.button:hover {
+            background-color: #005a00;
+        }
+
         table.records {
             width: 100%;
             border-collapse: collapse;
+            font-size: 14px;
         }
+
         table.records th, table.records td {
             border: 1px solid #ccc;
             padding: 6px 10px;
             text-align: left;
         }
+
         table.records th {
             background-color: #f0f0f0;
         }
-        a.button {
-            padding: 6px 14px;
-            background-color: #004080;
-            color: #fff;
-            text-decoration: none;
+        nav a.active {
+            background-color: #ffffffff; /* light blue */
+            color: #003366;            /* dark blue */
             font-weight: bold;
-            border-radius: 4px;
-            display: inline-block;
-            margin-right: 10px;
-            transition: background-color 0.3s ease;
-        }
-        a.button:hover {
-            background-color: #003060;
-        }
-        form.export-form {
-            display: inline-block;
-            margin-right: 10px;
+            text-decoration: none;     /* no underline */
+            padding: 8px 12px;         /* optionally add some padding */
+            border-radius: 4px;        /* optional rounded corners */
         }
     </style>
 </head>
 <body>
 
-<header>
-    <h1>Attendance Records</h1>
-</header>
+<header><h1>Attendance Records</h1></header>
 
-<nav>
-    <a href="../dashboard.php">Home</a>
-    <a href="student_dashboard.php">Students</a>
-    <a href="records.php" class="active">Records</a>
-    <a href="../index.php">Attendance</a>
-    <a href="../users/users_dashboard.php">Users</a>
-    <a href="../users/logout.php" class="logout-button">Logout</a>
-</nav>
+<?php include_once __DIR__ . '/../nav.php'; ?>
 
-<p>
-    <a href="add_student.php" class="button">Add Student</a>
-    <a href="records.php" class="button">Records</a>
-</p>
+<div class="filter-export-container">
+    <!-- Filters -->
+    <form method="get" class="filters" action="records.php" autocomplete="off">
+        <div>
+            <label for="student_id">Student</label>
+            <select name="student_id" id="student_id" style="min-width: 200px;">
+                <option value="">-- All Students --</option>
+                <?php foreach ($students as $st): ?>
+                    <option value="<?= $st['id'] ?>" <?= $student_id ==
+$st['id']
+    ? 'selected'
+    : '' ?>>
+                        <?= htmlspecialchars(
+                            $st['first_name'] . ' ' . $st['last_name']
+                        ) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
 
-<form method="get" class="filters" action="records.php">
-    <label for="student_id">Student</label>
-    <select name="student_id" id="student_id">
-        <option value="">-- All Students --</option>
-        <?php foreach ($students as $st):
-            $selected = ($student_id == $st['id']) ? 'selected' : '';
-            $fullName = htmlspecialchars($st['first_name'] . ' ' . $st['last_name']);
-        ?>
-            <option value="<?= $st['id'] ?>" <?= $selected ?>>
-                <?= $fullName ?> (Grade <?= htmlspecialchars($st['grade_level']) ?> - <?= htmlspecialchars($st['section']) ?>)
-            </option>
-        <?php endforeach; ?>
-    </select>
+        <div>
+            <label for="section">Section</label>
+            <select name="section" id="section" style="min-width: 100px;">
+                <option value="">-- All Sections --</option>
+                <?php foreach ($sections as $sec): ?>
+                    <option value="<?= htmlspecialchars(
+                        $sec
+                    ) ?>" <?= $section == $sec ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($sec) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
 
-    <label for="grade_level">Grade Level</label>
-    <select name="grade_level" id="grade_level">
-        <option value="">All</option>
-        <?php for ($i = 7; $i <= 12; $i++):
-            $selected = ($grade_level == $i) ? 'selected' : '';
-        ?>
-            <option value="<?= $i ?>" <?= $selected ?>>Grade <?= $i ?></option>
-        <?php endfor; ?>
-    </select>
+        <div>
+            <label for="date_from">From</label>
+            <input type="date" name="date_from" id="date_from" value="<?= htmlspecialchars(
+                $date_from
+            ) ?>" />
+        </div>
 
-    <label for="section">Section</label>
-    <input type="text" id="section" name="section" value="<?= htmlspecialchars($section) ?>" placeholder="Section (e.g. A, B, 1)" />
+        <div>
+            <label for="date_to">To</label>
+            <input type="date" name="date_to" id="date_to" value="<?= htmlspecialchars(
+                $date_to
+            ) ?>" />
+        </div>
 
-    <label for="date_filter">Date Filter</label>
-    <select name="date_filter" id="date_filter">
-        <option value="daily" <?= ($date_filter == 'daily') ? 'selected' : '' ?>>Daily</option>
-        <option value="weekly" <?= ($date_filter == 'weekly') ? 'selected' : '' ?>>Weekly</option>
-        <option value="monthly" <?= ($date_filter == 'monthly') ? 'selected' : '' ?>>Monthly</option>
-    </select>
-
-    <label for="date_value">Date</label>
-    <input type="date" name="date_value" id="date_value" value="<?= htmlspecialchars($date_value) ?>" required />
-
-    <button type="submit">Filter</button>
-</form>
-
-<!-- Export Buttons -->
-<p>
-    <form method="get" action="export_csv.php" class="export-form">
-        <?php foreach ($_GET as $key => $value): ?>
-            <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>" />
-        <?php endforeach; ?>
-        <button type="submit" class="button">Export CSV</button>
+        <div>
+            <button type="submit" class="search-btn">Search</button>
+        </div>
     </form>
 
-    <form method="get" action="export_pdf.php" class="export-form">
-        <?php foreach ($_GET as $key => $value): ?>
-            <input type="hidden" name="<?= htmlspecialchars($key) ?>" value="<?= htmlspecialchars($value) ?>" />
-        <?php endforeach; ?>
-        <button type="submit" class="button">Export PDF</button>
-    </form>
-</p>
+    <!-- Export buttons -->
+    <div class="export-buttons">
+        <form method="get" action="export_csv.php" class="export-form">
+            <?php foreach ($_GET as $k => $v): ?>
+                <input type="hidden" name="<?= htmlspecialchars(
+                    $k
+                ) ?>" value="<?= htmlspecialchars($v) ?>" />
+            <?php endforeach; ?>
+            <button type="submit" class="button">Export CSV</button>
+        </form>
+
+        <form method="get" action="export_pdf.php" class="export-form">
+            <?php foreach ($_GET as $k => $v): ?>
+                <input type="hidden" name="<?= htmlspecialchars(
+                    $k
+                ) ?>" value="<?= htmlspecialchars($v) ?>" />
+            <?php endforeach; ?>
+            <button type="submit" class="button">Export PDF</button>
+        </form>
+    </div>
+</div>
 
 <table class="records">
     <thead>
         <tr>
             <th>Name</th>
-            <th>Grade Level</th>
+            <th>Grade</th>
             <th>Section</th>
             <th>Date</th>
-            <th>Time In</th>
-            <th>Time Out</th>
+            <th>In</th>
+            <th>Out</th>
         </tr>
     </thead>
     <tbody>
-        <?php if ($records): ?>
-            <?php foreach ($records as $rec): ?>
-                <tr>
-                    <td><?= htmlspecialchars($rec['first_name'] . ' ' . $rec['last_name']) ?></td>
-                    <td><?= htmlspecialchars($rec['grade_level']) ?></td>
-                    <td><?= htmlspecialchars($rec['section']) ?></td>
-                    <td><?= date('M d, Y', strtotime($rec['attendance_date'])) ?></td>
-                    <td><?= $rec['time_in'] ? date('h:i A', strtotime($rec['time_in'])) : '-' ?></td>
-                    <td><?= $rec['time_out'] ? date('h:i A', strtotime($rec['time_out'])) : '-' ?></td>
-                </tr>
-            <?php endforeach; ?>
+        <?php if ($pairedRecords): ?>
+            <?php foreach ($pairedRecords as $pr):
+                $r = $pr['info']; ?>
+            <tr>
+                <td><?= htmlspecialchars(
+                    $r['first_name'] . ' ' . $r['last_name']
+                ) ?></td>
+                <td><?= htmlspecialchars($r['grade_level']) ?></td>
+                <td><?= htmlspecialchars($r['section']) ?></td>
+                <td><?= formatDate($r['time']) ?></td>
+                <td><?= isset($pr['time_in']) && $pr['time_in'] === null
+                    ? '-'
+                    : formatTime($r['time']) ?></td>
+                <td><?= $pr['time_out']
+                    ? formatTime($pr['time_out'])
+                    : '-' ?></td>
+            </tr>
+            <?php
+            endforeach; ?>
         <?php else: ?>
-            <tr><td colspan="6">No records found for the selected filters.</td></tr>
+            <tr><td colspan="6">No records found.</td></tr>
         <?php endif; ?>
     </tbody>
 </table>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0/dist/js/select2.min.js"></script>
+<script>
+    $(document).ready(function() {
+        $('#student_id').select2({
+            placeholder: '-- All Students --',
+            allowClear: true,
+            width: '220px'
+        });
+    });
+</script>
 
 </body>
 </html>

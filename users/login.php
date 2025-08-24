@@ -7,7 +7,7 @@ if (isset($_SESSION['user_id'])) {
     $redirect = $_SESSION['redirect_after_login'] ?? '../dashboard.php';
     unset($_SESSION['redirect_after_login']);
     header("Location: $redirect");
-    exit;
+    exit();
 }
 
 $error = '';
@@ -19,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($username === '' || $password === '') {
         $error = 'Please enter username and password.';
     } else {
-        $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ?");
+        $stmt = $pdo->prepare('SELECT * FROM users WHERE username = ?');
         $stmt->execute([$username]);
         $user = $stmt->fetch();
 
@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $redirect = $_SESSION['redirect_after_login'] ?? '../dashboard.php';
             unset($_SESSION['redirect_after_login']);
             header("Location: $redirect");
-            exit;
+            exit();
         } else {
             $error = 'Invalid username or password.';
         }
@@ -48,7 +48,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
-
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -58,14 +57,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="stylesheet" href="../css/style.css" />
 </head>
 <body>
-    <form method="post" class="login-form">
-        <h2>Login</h2>
-        <?php if ($error): ?>
-            <p class="error"><?= htmlspecialchars($error) ?></p>
-        <?php endif; ?>
-        <input type="text" name="username" placeholder="Username" required autofocus />
-        <input type="password" name="password" placeholder="Password" required />
-        <button type="submit">Login</button>
-    </form>
+    <div class="login-container">
+        <h1 class="login-header">Student Biometric Attendance System</h1>
+        <form method="post" class="login-form">
+            <h2>Login</h2>
+            <?php if ($error): ?>
+                <p class="error"><?= htmlspecialchars($error) ?></p>
+            <?php endif; ?>
+            <input type="text" name="username" placeholder="Username" required autofocus />
+            <input type="password" name="password" placeholder="Password" required />
+            <button type="submit">Login</button>
+        </form>
+    </div>
 </body>
 </html>

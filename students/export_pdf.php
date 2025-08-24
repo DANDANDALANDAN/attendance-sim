@@ -2,12 +2,13 @@
 session_start();
 if (!isset($_SESSION['user_id'])) {
     header('Location: ../users/login.php');
-    exit;
+    exit();
 }
 
 require '../config/db.php';
-require_once '../tcpdf/tcpdf.php';  // Adjust path if necessary
+require_once '../tcpdf/tcpdf.php'; // Adjust path if necessary
 
+// Get filters from GET
 $student_id = $_GET['student_id'] ?? '';
 $section = trim($_GET['section'] ?? '');
 $grade_level = $_GET['grade_level'] ?? '';
@@ -21,6 +22,7 @@ try {
     $date_value = $date->format('Y-m-d');
 }
 
+// Determine date range based on filter
 switch ($date_filter) {
     case 'weekly':
         $weekStart = clone $date;
@@ -41,47 +43,121 @@ switch ($date_filter) {
         break;
 }
 
-$whereClauses = ["a.time BETWEEN ? AND ?"];
+$whereClauses = ['a.time BETWEEN ? AND ?'];
 $params = [$dateStart, $dateEnd];
 
 if ($student_id !== '' && is_numeric($student_id)) {
-    $whereClauses[] = "a.student_id = ?";
+    $whereClauses[] = 'a.student_id = ?';
     $params[] = $student_id;
 }
 
 if ($section !== '') {
-    $whereClauses[] = "s.section LIKE ?";
+    $whereClauses[] = 's.section LIKE ?';
     $params[] = "%$section%";
 }
 
 if ($grade_level !== '') {
-    $whereClauses[] = "s.grade_level = ?";
+    $whereClauses[] = 's.grade_level = ?';
     $params[] = $grade_level;
 }
 
 $whereSQL = 'WHERE ' . implode(' AND ', $whereClauses);
 
+// Fetch detailed attendance records matching filters, ordered by student and time ascending
 $sql = "
-SELECT 
+SELECT
+    s.id AS student_id,
     s.first_name,
     s.last_name,
     s.grade_level,
     s.section,
-    DATE(a.time) AS attendance_date,
-    MIN(CASE WHEN a.type = 'IN' THEN a.time ELSE NULL END) AS time_in,
-    MAX(CASE WHEN a.type = 'OUT' THEN a.time ELSE NULL END) AS time_out
+    a.time,
+    a.type
 FROM attendance a
 JOIN students s ON a.student_id = s.id
 {$whereSQL}
-GROUP BY s.id, attendance_date
-ORDER BY attendance_date DESC, s.last_name, s.first_name
+ORDER BY s.last_name, s.first_name, s.id, a.time ASC
 ";
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
-$records = $stmt->fetchAll();
+$attendanceRecords = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Initialize TCPDF
+// Pair IN and OUT sequentially as in records.php display logic
+$pairedRecords = [];
+$currentStudentId = null;
+$pendingInRecord = null;
+
+// Helper functions
+function formatDate($datetimeStr)
+{
+    return date('M d, Y', strtotime($datetimeStr));
+}
+function formatTime($datetimeStr)
+{
+    return date('h:i A', strtotime($datetimeStr));
+}
+
+foreach ($attendanceRecords as $rec) {
+    if ($currentStudentId !== $rec['student_id']) {
+        $currentStudentId = $rec['student_id'];
+        $pendingInRecord = null;
+    }
+
+    if ($rec['type'] === 'IN') {
+        if ($pendingInRecord !== null) {
+            // save unmatched IN with null OUT
+            $pairedRecords[] = [
+                'first_name' => $pendingInRecord['first_name'],
+                'last_name' => $pendingInRecord['last_name'],
+                'grade_level' => $pendingInRecord['grade_level'],
+                'section' => $pendingInRecord['section'],
+                'date' => formatDate($pendingInRecord['time']),
+                'time_in' => $pendingInRecord['time'],
+                'time_out' => null,
+            ];
+        }
+        $pendingInRecord = $rec;
+    } elseif ($rec['type'] === 'OUT') {
+        if ($pendingInRecord !== null) {
+            $pairedRecords[] = [
+                'first_name' => $pendingInRecord['first_name'],
+                'last_name' => $pendingInRecord['last_name'],
+                'grade_level' => $pendingInRecord['grade_level'],
+                'section' => $pendingInRecord['section'],
+                'date' => formatDate($pendingInRecord['time']),
+                'time_in' => $pendingInRecord['time'],
+                'time_out' => $rec['time'],
+            ];
+            $pendingInRecord = null;
+        } else {
+            // OUT without IN
+            $pairedRecords[] = [
+                'first_name' => $rec['first_name'],
+                'last_name' => $rec['last_name'],
+                'grade_level' => $rec['grade_level'],
+                'section' => $rec['section'],
+                'date' => formatDate($rec['time']),
+                'time_in' => null,
+                'time_out' => $rec['time'],
+            ];
+        }
+    }
+}
+
+if ($pendingInRecord !== null) {
+    $pairedRecords[] = [
+        'first_name' => $pendingInRecord['first_name'],
+        'last_name' => $pendingInRecord['last_name'],
+        'grade_level' => $pendingInRecord['grade_level'],
+        'section' => $pendingInRecord['section'],
+        'date' => formatDate($pendingInRecord['time']),
+        'time_in' => $pendingInRecord['time'],
+        'time_out' => null,
+    ];
+}
+
+// Create new PDF document
 $pdf = new TCPDF('L', PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
 
 $pdf->SetCreator('Student Attendance System');
@@ -92,7 +168,7 @@ $pdf->SetSubject('Attendance Records Export');
 $pdf->setPrintHeader(false);
 $pdf->setPrintFooter(false);
 $pdf->SetMargins(10, 10, 10);
-$pdf->SetAutoPageBreak(TRUE, 10);
+$pdf->SetAutoPageBreak(true, 10);
 $pdf->AddPage();
 
 // Title
@@ -101,10 +177,11 @@ $pdf->Cell(0, 10, 'Attendance Records', 0, 1, 'C');
 
 // Filters info
 $pdf->SetFont('helvetica', '', 10);
-$filterInfo = "Date Filter: " . ucfirst($date_filter) . ", Date: " . $date_value;
+$filterInfo =
+    'Date Filter: ' . ucfirst($date_filter) . ', Date: ' . $date_value;
 $pdf->MultiCell(0, 5, $filterInfo, 0, 'L', 0, 1);
 
-// Table
+// Table header
 $pdf->SetFont('helvetica', 'B', 12);
 $html = <<<EOD
 <table border="1" cellpadding="4">
@@ -119,14 +196,23 @@ $html = <<<EOD
 EOD;
 
 $pdf->SetFont('helvetica', '', 11);
-foreach ($records as $rec) {
+foreach ($pairedRecords as $rec) {
     $html .= '<tr>';
-    $html .= '<td>' . htmlspecialchars($rec['first_name'] . ' ' . $rec['last_name']) . '</td>';
+    $html .=
+        '<td>' .
+        htmlspecialchars($rec['first_name'] . ' ' . $rec['last_name']) .
+        '</td>';
     $html .= '<td>' . htmlspecialchars($rec['grade_level']) . '</td>';
     $html .= '<td>' . htmlspecialchars($rec['section']) . '</td>';
-    $html .= '<td>' . date('M d, Y', strtotime($rec['attendance_date'])) . '</td>';
-    $html .= '<td>' . ($rec['time_in'] ? date('h:i A', strtotime($rec['time_in'])) : '-') . '</td>';
-    $html .= '<td>' . ($rec['time_out'] ? date('h:i A', strtotime($rec['time_out'])) : '-') . '</td>';
+    $html .= '<td>' . $rec['date'] . '</td>';
+    $html .=
+        '<td>' .
+        ($rec['time_in'] ? formatTime($rec['time_in']) : '-') .
+        '</td>';
+    $html .=
+        '<td>' .
+        ($rec['time_out'] ? formatTime($rec['time_out']) : '-') .
+        '</td>';
     $html .= '</tr>';
 }
 
@@ -135,4 +221,4 @@ $html .= '</table>';
 $pdf->writeHTML($html, true, false, true, false, '');
 
 $pdf->Output('attendance_records_' . date('Ymd_His') . '.pdf', 'D');
-exit;
+exit();

@@ -2,11 +2,12 @@
 session_start();
 if (!isset($_SESSION['user_id'])) {
     header('Location: ../users/login.php');
-    exit;
+    exit();
 }
 
 require '../config/db.php';
 
+// Get filters from GET
 $student_id = $_GET['student_id'] ?? '';
 $section = trim($_GET['section'] ?? '');
 $grade_level = $_GET['grade_level'] ?? '';
@@ -20,6 +21,7 @@ try {
     $date_value = $date->format('Y-m-d');
 }
 
+// Determine date range based on filter
 switch ($date_filter) {
     case 'weekly':
         $weekStart = clone $date;
@@ -40,63 +42,150 @@ switch ($date_filter) {
         break;
 }
 
-$whereClauses = ["a.time BETWEEN ? AND ?"];
+$whereClauses = ['a.time BETWEEN ? AND ?'];
 $params = [$dateStart, $dateEnd];
 
 if ($student_id !== '' && is_numeric($student_id)) {
-    $whereClauses[] = "a.student_id = ?";
+    $whereClauses[] = 'a.student_id = ?';
     $params[] = $student_id;
 }
 
 if ($section !== '') {
-    $whereClauses[] = "s.section LIKE ?";
+    $whereClauses[] = 's.section LIKE ?';
     $params[] = "%$section%";
 }
 
 if ($grade_level !== '') {
-    $whereClauses[] = "s.grade_level = ?";
+    $whereClauses[] = 's.grade_level = ?';
     $params[] = $grade_level;
 }
 
 $whereSQL = 'WHERE ' . implode(' AND ', $whereClauses);
 
+// Fetch detailed attendance records matching filters, ordered by student and time ascending
 $sql = "
-SELECT 
+SELECT
+    s.id AS student_id,
     s.first_name,
     s.last_name,
     s.grade_level,
     s.section,
-    DATE(a.time) AS attendance_date,
-    MIN(CASE WHEN a.type = 'IN' THEN a.time ELSE NULL END) AS time_in,
-    MAX(CASE WHEN a.type = 'OUT' THEN a.time ELSE NULL END) AS time_out
+    a.time,
+    a.type
 FROM attendance a
 JOIN students s ON a.student_id = s.id
 {$whereSQL}
-GROUP BY s.id, attendance_date
-ORDER BY attendance_date DESC, s.last_name, s.first_name
+ORDER BY s.last_name, s.first_name, s.id, a.time ASC
 ";
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
-$records = $stmt->fetchAll();
+$attendanceRecords = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Pair IN and OUT sequentially as in records.php display logic
+$pairedRecords = [];
+$currentStudentId = null;
+$pendingInRecord = null;
+
+// Helper functions
+function formatDate($datetimeStr)
+{
+    return date('M d, Y', strtotime($datetimeStr));
+}
+function formatTime($datetimeStr)
+{
+    return date('h:i A', strtotime($datetimeStr));
+}
+
+foreach ($attendanceRecords as $rec) {
+    if ($currentStudentId !== $rec['student_id']) {
+        $currentStudentId = $rec['student_id'];
+        $pendingInRecord = null;
+    }
+
+    if ($rec['type'] === 'IN') {
+        if ($pendingInRecord !== null) {
+            // save unmatched IN with null OUT
+            $pairedRecords[] = [
+                'first_name' => $pendingInRecord['first_name'],
+                'last_name' => $pendingInRecord['last_name'],
+                'grade_level' => $pendingInRecord['grade_level'],
+                'section' => $pendingInRecord['section'],
+                'date' => formatDate($pendingInRecord['time']),
+                'time_in' => $pendingInRecord['time'],
+                'time_out' => null,
+            ];
+        }
+        $pendingInRecord = $rec;
+    } elseif ($rec['type'] === 'OUT') {
+        if ($pendingInRecord !== null) {
+            $pairedRecords[] = [
+                'first_name' => $pendingInRecord['first_name'],
+                'last_name' => $pendingInRecord['last_name'],
+                'grade_level' => $pendingInRecord['grade_level'],
+                'section' => $pendingInRecord['section'],
+                'date' => formatDate($pendingInRecord['time']),
+                'time_in' => $pendingInRecord['time'],
+                'time_out' => $rec['time'],
+            ];
+            $pendingInRecord = null;
+        } else {
+            // OUT without IN
+            $pairedRecords[] = [
+                'first_name' => $rec['first_name'],
+                'last_name' => $rec['last_name'],
+                'grade_level' => $rec['grade_level'],
+                'section' => $rec['section'],
+                'date' => formatDate($rec['time']),
+                'time_in' => null,
+                'time_out' => $rec['time'],
+            ];
+        }
+    }
+}
+
+if ($pendingInRecord !== null) {
+    $pairedRecords[] = [
+        'first_name' => $pendingInRecord['first_name'],
+        'last_name' => $pendingInRecord['last_name'],
+        'grade_level' => $pendingInRecord['grade_level'],
+        'section' => $pendingInRecord['section'],
+        'date' => formatDate($pendingInRecord['time']),
+        'time_in' => $pendingInRecord['time'],
+        'time_out' => null,
+    ];
+}
+
+// Output CSV headers
 header('Content-Type: text/csv; charset=utf-8');
-header('Content-Disposition: attachment; filename=attendance_records_' . date('Ymd_His') . '.csv');
+header(
+    'Content-Disposition: attachment; filename=attendance_records_' .
+        date('Ymd_His') .
+        '.csv'
+);
 
 $output = fopen('php://output', 'w');
 
-fputcsv($output, ['Name', 'Grade Level', 'Section', 'Date', 'Time In', 'Time Out']);
+fputcsv($output, [
+    'Name',
+    'Grade Level',
+    'Section',
+    'Date',
+    'Time In',
+    'Time Out',
+]);
 
-foreach ($records as $rec) {
+// Output rows
+foreach ($pairedRecords as $rec) {
     fputcsv($output, [
         $rec['first_name'] . ' ' . $rec['last_name'],
         $rec['grade_level'],
         $rec['section'],
-        date('Y-m-d', strtotime($rec['attendance_date'])),
-        $rec['time_in'] ? date('h:i A', strtotime($rec['time_in'])) : '',
-        $rec['time_out'] ? date('h:i A', strtotime($rec['time_out'])) : '',
+        $rec['date'],
+        $rec['time_in'] ? formatTime($rec['time_in']) : '',
+        $rec['time_out'] ? formatTime($rec['time_out']) : '',
     ]);
 }
 
 fclose($output);
-exit;
+exit();

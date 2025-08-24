@@ -42,16 +42,16 @@ nav a {
     margin-right: 0; /* reset to let flex gap work */
 }
 nav a:hover {
-    background-color: #003060;
+    background-color: #0080ff;
     color: #fff;
 }
 
 /* Push logout button to the far right */
 nav a.logout-button {
     margin-left: auto;
-    background-color: #fff;
-    color: #004080;
-    border: 2px solid #004080;
+    background-color: maroon; /* maroon background */
+    color: white;             /* white text */
+    border: 2px solid maroon;
     font-weight: bold;
     cursor: pointer;
     transition: background-color 0.3s ease, color 0.3s ease;
@@ -61,11 +61,11 @@ nav a.logout-button {
     white-space: nowrap;
 }
 
-/* Logout hover style */
 nav a.logout-button:hover {
-    background-color: #004080;
-    color: #fff;
+    background-color: #800000; /* darker maroon hover */
+    color: white;
 }
+
 
 /* Other original styles */
 table {
@@ -145,3 +145,72 @@ a.button:hover {
     background-color: #003060;
 }
 
+/* Center the login container vertically and horizontally */
+.login-container {
+    min-height: 100vh; /* Full viewport height */
+    display: flex;
+    flex-direction: column;
+    justify-content: center; /* vertical center */
+    align-items: center;     /* horizontal center */
+    padding: 20px;
+    background: #eef; /* Match body background */
+}
+
+/* Style the header label above the form */
+.login-header {
+    font-size: 2rem;
+    color: #004080;
+    margin-bottom: 20px;
+    text-align: center;
+    font-weight: bold;
+}
+
+/* Style the login form */
+.login-form {
+    background: #fff;
+    padding: 30px 25px;
+    border-radius: 8px;
+    box-shadow: 0 0 15px rgba(0, 64, 128, 0.2);
+    width: 100%;
+    max-width: 360px;
+    box-sizing: border-box;
+}
+
+.login-form h2 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    text-align: center;
+    color: #004080;
+}
+
+/* Inputs and button full width and styled */
+.login-form input,
+.login-form button {
+    width: 100%;
+    padding: 10px;
+    margin: 8px 0;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    box-sizing: border-box;
+}
+
+.login-form button {
+    background-color: #004080;
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+}
+
+.login-form button:hover {
+    background-color: #003060;
+}
+
+/* Error message style */
+.login-form .error {
+    color: red;
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-align: center;
+}
